@@ -83,6 +83,7 @@ cargo build --release
 ```
 promptproof scan [OPTIONS] [PATH...]      scan files (or stdin if none / '-')
 promptproof sanitize [OPTIONS] [PATH]     strip hidden characters
+promptproof serve [SCAN OPTIONS]          coprocess: framed stdin -> JSONL stdout
 promptproof version | help
 ```
 
@@ -104,6 +105,30 @@ Scan options: `--json`, `--quiet` (exit code only), `--no-decode` (skip
 base64/hex/percent decoding), `--suspicious-at N` / `--dangerous-at N` (tune
 score thresholds). Sanitize options: `--mark` (replace hidden chars with visible
 `<U+XXXX>` markers instead of deleting), `--report` (removal summary to stderr).
+
+### `serve` — embed the scanner in another process
+
+Spawning `promptproof scan` once per tool result is fine for a shell pipeline
+but wasteful on a hot request path: a process fork dominates the ~microseconds
+the scan itself takes. `serve` is a long-lived coprocess for exactly that case —
+a gateway keeps one (or a small pool) alive and streams content through it.
+
+The wire protocol is a length-prefixed frame in, one JSON verdict line out:
+
+```
+34                                     <- ASCII byte count, then newline
+the weather in paris is mild today     <- exactly 34 bytes of content
+```
+```json
+{"source":"<serve>","verdict":"ok","score":0,"stats":{...},"findings":[]}
+```
+
+Framing is by **length, not by line**, so content that itself contains newlines
+(the common case for tool output) scans correctly. `serve` takes the same
+`--suspicious-at` / `--dangerous-at` / `--no-decode` options as `scan`, emits the
+same JSON as `scan --json`, and exits 0 on EOF. It reuses the identical detection
+engine — no separate code path to keep in sync. This is the mode the gateways
+below embed.
 
 ## Library
 
@@ -236,10 +261,27 @@ tool call ── mcp-gateway-lite (route/audit/rate-limit)
 Use the verdict to decide (pass / sanitize-then-pass / drop / escalate), and
 `sanitize` to close hidden channels on anything you do pass through.
 
+## Used in production by the portfolio
+
+promptproof is no longer a standalone demo — via the [`serve`](#serve--embed-the-scanner-in-another-process)
+coprocess it is embedded as real, opt-in middleware in two other gateways in
+this portfolio, scanning untrusted content at both data-plane chokepoints:
+
+| Repo | What it scans | On a dangerous verdict |
+|---|---|---|
+| [mcp-gateway-lite](https://github.com/bharat3645/mcp-gateway-lite) | **`tools/call` results** flowing back from an MCP server to the agent (the classic indirect-injection path) | blocks the result with a JSON-RPC error, or flags + audits |
+| [modelgate](https://github.com/bharat3645/modelgate) | **`messages[].content`** on inbound chat-completion requests, before they reach the model | rejects the request, or flags + audits |
+
+Both keep a `promptproof serve` pool alive and stream content through it, so the
+detection engine here is the single source of truth — neither gateway
+reimplements any of it. Both integrations are **off by default** and gated behind
+a config threshold, so enabling promptproof never silently changes existing
+behavior. See each repo's README for the wiring and the measured latency it adds.
+
 ## Development
 
 ```sh
-cargo test                                  # 65 tests: unit + integration + corpus + CLI
+cargo test                                  # 69 tests: unit + integration + corpus + CLI
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 bash ci/smoke.sh                            # end-to-end against the real binary + corpus

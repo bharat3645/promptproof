@@ -3,10 +3,11 @@
 //! Subcommands:
 //!   * `scan`      — scan files or stdin for injection/exfiltration signals.
 //!   * `sanitize`  — strip hidden characters from a file or stdin.
+//!   * `serve`     — long-lived coprocess: framed content in, JSON verdict out.
 //!   * `version`   — print the version.
 //!   * `help`      — usage.
 
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::process::ExitCode;
 
 use promptproof::json::report_json;
@@ -19,6 +20,7 @@ promptproof — data-plane prompt-injection & exfiltration scanner
 USAGE:
     promptproof scan [OPTIONS] [PATH...]      scan files (or stdin if none / '-')
     promptproof sanitize [OPTIONS] [PATH]     strip hidden characters
+    promptproof serve [SCAN OPTIONS]          coprocess: framed stdin -> JSONL stdout
     promptproof version
     promptproof help
 
@@ -34,10 +36,25 @@ SANITIZE OPTIONS:
                          (default: delete them)
     --report             print a removal summary to stderr
 
+SERVE PROTOCOL:
+    A long-lived scanner for embedding in another process (e.g. a gateway
+    that scans tool results or request messages inline). Each request is a
+    length-prefixed frame on stdin: an ASCII decimal byte count followed by
+    a newline, then exactly that many bytes of content. For each frame the
+    same compact JSON report the '--json' scan emits is written to stdout on
+    one line and flushed. EOF ends the loop with exit 0. serve accepts the
+    same --suspicious-at / --dangerous-at / --no-decode options as scan.
+
 EXIT CODES (scan):
     0 ok   1 suspicious   2 dangerous   3 usage/IO error
     (the worst verdict across all inputs is returned)
 ";
+
+// Upper bound on a single serve frame. The intended embedder caps content
+// far below this (a gateway scans a bounded slice of a tool result); this
+// only guards against a corrupt length prefix demanding an absurd
+// allocation. 64 MiB is generous headroom over any real tool result.
+const MAX_SERVE_FRAME: usize = 64 << 20;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -48,6 +65,7 @@ fn main() -> ExitCode {
     match args[0].as_str() {
         "scan" => cmd_scan(&args[1..]),
         "sanitize" => cmd_sanitize(&args[1..]),
+        "serve" => cmd_serve(&args[1..]),
         "version" | "--version" | "-V" => {
             println!("promptproof {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -143,6 +161,75 @@ fn cmd_scan(args: &[String]) -> ExitCode {
     }
 
     ExitCode::from(worst.exit_code() as u8)
+}
+
+fn cmd_serve(args: &[String]) -> ExitCode {
+    let mut policy = Policy::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--no-decode" => policy.decode_encoded = false,
+            "--suspicious-at" => {
+                i += 1;
+                match args.get(i).and_then(|s| s.parse().ok()) {
+                    Some(n) => policy.suspicious_at = n,
+                    None => return usage_err("--suspicious-at needs a number"),
+                }
+            }
+            "--dangerous-at" => {
+                i += 1;
+                match args.get(i).and_then(|s| s.parse().ok()) {
+                    Some(n) => policy.dangerous_at = n,
+                    None => return usage_err("--dangerous-at needs a number"),
+                }
+            }
+            "-h" | "--help" => {
+                print!("{USAGE}");
+                return ExitCode::SUCCESS;
+            }
+            s => return usage_err(&format!("serve: unexpected argument '{s}'")),
+        }
+        i += 1;
+    }
+
+    let stdin = std::io::stdin();
+    let mut reader = std::io::BufReader::new(stdin.lock());
+    let stdout = std::io::stdout();
+    let mut w = std::io::BufWriter::new(stdout.lock());
+
+    loop {
+        // Read the length-prefix line. An empty read is a clean EOF.
+        let mut header = String::new();
+        match reader.read_line(&mut header) {
+            Ok(0) => return ExitCode::SUCCESS,
+            Ok(_) => {}
+            Err(e) => return io_err("<stdin>", &e.to_string()),
+        }
+        let header = header.trim();
+        if header.is_empty() {
+            // Tolerate blank separator lines between frames.
+            continue;
+        }
+        let n: usize = match header.parse() {
+            Ok(n) => n,
+            Err(_) => return usage_err(&format!("serve: bad frame length {header:?}")),
+        };
+        if n > MAX_SERVE_FRAME {
+            return usage_err(&format!("serve: frame length {n} exceeds cap"));
+        }
+
+        let mut buf = vec![0u8; n];
+        if let Err(e) = reader.read_exact(&mut buf) {
+            // A short read means the peer closed mid-frame; nothing more to do.
+            return io_err("<stdin>", &e.to_string());
+        }
+        let text = String::from_utf8_lossy(&buf);
+        let report = scan_with(&text, &policy);
+        if writeln!(w, "{}", report_json("<serve>", &report)).is_err() || w.flush().is_err() {
+            // The embedder went away; stop quietly.
+            return ExitCode::SUCCESS;
+        }
+    }
 }
 
 fn print_human<W: Write>(w: &mut W, source: &str, r: &Report) {

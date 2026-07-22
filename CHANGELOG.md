@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-22
+
+Adds an embeddable coprocess mode so other services can scan content inline on
+their request path without paying a process spawn per scan. This release is what
+turns promptproof from a standalone CLI into middleware — it is now embedded in
+two other repos in the portfolio (see **Used in production** in the README).
+
+### Added
+
+- **`serve` subcommand** — a long-lived scanner for embedding in another
+  process. It reads length-prefixed frames from stdin (an ASCII decimal byte
+  count, a newline, then exactly that many content bytes) and writes one compact
+  JSON report per frame to stdout, flushing after each. Length framing (not line
+  framing) so content containing newlines scans correctly. Honors the same
+  `--suspicious-at` / `--dangerous-at` / `--no-decode` options as `scan`; a
+  clean EOF exits 0. Reuses the existing detection engine unchanged — no new
+  detection logic, no new dependencies.
+- Serve-mode integration tests (`tests/cli_test.rs`): one-verdict-per-frame,
+  newline-containing frames, threshold honoring, and bad-length-prefix rejection.
+- `ci/smoke.sh` drives the real `serve` binary through a multi-frame session.
+
+### Notes
+
+- No behavior change to `scan`, `sanitize`, or the library API; existing callers
+  are unaffected. This is a minor version because it only adds a subcommand.
+
 ## [0.1.0] - 2026-07-22
 
 First release. A zero-dependency library + CLI that scans untrusted content for

@@ -1,0 +1,1 @@
+Useful links: https://docs.example.com/getting-started and https://example.com/pricing. The API base URL is https://api.example.com/v1.

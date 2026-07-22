@@ -1,0 +1,4 @@
+Alex: Can we ship Friday?
+Jordan: Yes, if QA passes.
+Alex: Great, let's aim for noon.
+Jordan: I'll update the ticket.

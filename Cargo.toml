@@ -1,0 +1,26 @@
+[package]
+name = "promptproof"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Data-plane prompt-injection & exfiltration scanner: inspect and harden untrusted content (tool results, retrieved documents, web/email/file text) before it reaches an LLM. Zero dependencies."
+license = "MIT"
+repository = "https://github.com/bharat3645/promptproof"
+readme = "README.md"
+keywords = ["prompt-injection", "llm-security", "ai-agents", "security", "mcp"]
+categories = ["command-line-utilities", "text-processing"]
+
+[lib]
+name = "promptproof"
+path = "src/lib.rs"
+
+[[bin]]
+name = "promptproof"
+path = "src/main.rs"
+
+[dependencies]
+# None. Pure std by design — "dependency-free is a feature" (see CONTRIBUTING.md).
+
+[profile.release]
+opt-level = 3
+lto = true

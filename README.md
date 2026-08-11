@@ -172,6 +172,37 @@ security blog that merely *quotes* "ignore previous instructions" is only
 `suspicious`. Verdicts: `ok` (0) · `suspicious` (1) · `dangerous` (2), matching
 the CLI exit codes.
 
+## Allowlist — silencing a reviewed false positive
+
+`suspicious` findings that turn out to be a known, reviewed false positive
+(your own API docs mentioning a tool by name; a fixed disclaimer) shouldn't
+have to sit there forever. A `--allowlist policy.json` file suppresses a
+*specific* rule — optionally scoped to documents containing a substring you
+choose (a URL, a doc title) — without lowering detection for anything else.
+
+```console
+$ cat policy.json
+[{"rule": "hijack.call-tool", "contains": "search endpoint",
+  "reason": "own API docs mention our tools by name"}]
+
+$ promptproof scan corpus/benign/b02_api_docs.md
+corpus/benign/b02_api_docs.md: SUSPICIOUS — score 3, 1 finding(s)
+  [medium] tool-hijack  hijack.call-tool  @34..57
+      directive to call a tool/function/command
+      "use the search endpoint"
+
+$ promptproof scan corpus/benign/b02_api_docs.md --allowlist policy.json
+corpus/benign/b02_api_docs.md: OK — clean (1 suppressed by allowlist)
+```
+
+`"rule"` is a finding `id` (or `"*"` for any rule); `"contains"` is optional
+and anchors to the *whole scanned document* (not per-occurrence); suppression
+always recomputes the verdict/score from what's left and always reports how
+many findings it removed — human output as a summary line, `--json`/`serve`
+as a `"suppressed"` field. A malformed policy file is a hard usage error
+(exit 3), never a silent no-op — a typo in your allowlist must not fail open.
+Accepted by both `scan` and `serve` (`promptproof help` has the full syntax).
+
 ## Architecture
 
 ```mermaid
@@ -281,7 +312,7 @@ behavior. See each repo's README for the wiring and the measured latency it adds
 ## Development
 
 ```sh
-cargo test                                  # 69 tests: unit + integration + corpus + CLI
+cargo test                                  # 99 tests: unit + integration + corpus + CLI + doctests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 bash ci/smoke.sh                            # end-to-end against the real binary + corpus
@@ -292,7 +323,6 @@ detectors must come with corpus samples.
 
 ## Roadmap
 
-- A JSON policy file (custom rules/allowlists) beyond the current CLI flags.
 - Streaming / chunked scanning for very large inputs.
 - Optional NFKC normalization behind a feature flag (needs Unicode data).
 - Language bindings (the CLI is already language-agnostic via subprocess/JSONL).

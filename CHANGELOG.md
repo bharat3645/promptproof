@@ -4,6 +4,45 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-11
+
+Adds a JSON allowlist policy file so a caller can suppress a specific,
+reviewed false positive (the tool's own documented gap — a security post
+quoting an attack phrase, API docs mentioning tools by name — see "How
+verdicts work" in the README) without lowering detection for anyone else.
+
+### Added
+
+- **`--allowlist PATH`** (accepted by `scan` and `serve`) — a JSON array of
+  `{"rule": "...", "contains": "...", "reason": "..."}` entries. `"rule"` is a
+  finding id (or `"*"` for any rule); `"contains"` is optional and anchors to
+  the whole scanned document, not a single occurrence; `"reason"` is
+  documentation only. Suppressed findings are removed and the verdict/score
+  recomputed from what's left; the count is always reported (`suppressed` in
+  `--json`/`serve` output, a summary line in human output) — an allowlist
+  never deletes evidence silently. A malformed or wrong-shaped policy file is
+  a hard usage error (exit 3), never a silent no-op.
+- `promptproof::allowlist::Allowlist` (library API): `Allowlist::parse` and
+  `Allowlist::apply`.
+- `src/json_value.rs` — a small, dependency-free JSON *parser* (the existing
+  `json.rs` only emits) scoped to what a hand-written policy file needs:
+  null/bool/number/string/array/object, full string escapes incl. `\uXXXX`
+  surrogate pairs. 9 unit tests including rejection of trailing commas,
+  unterminated strings, and bare control characters in strings.
+- `json::report_json_with_suppressed` — `report_json` plus a `"suppressed"`
+  count, added as a separate function so existing callers of `report_json`
+  are unaffected.
+- 20 new tests (11 library unit tests in `src/allowlist.rs`, 9 CLI
+  integration tests in `tests/cli_test.rs` spawning the real binary) + 1 new
+  doctest; `ci/smoke.sh` gained a suppression scenario and a malformed-policy
+  usage-error scenario, both run against the real release binary.
+
+### Notes
+
+- No behavior change when `--allowlist` is not passed; existing callers
+  (including the `serve` embeddings in mcp-gateway-lite and modelgate) are
+  unaffected until they opt in.
+
 ## [0.2.0] - 2026-07-22
 
 Adds an embeddable coprocess mode so other services can scan content inline on

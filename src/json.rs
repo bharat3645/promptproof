@@ -53,6 +53,21 @@ pub fn report_json(source: &str, r: &Report) -> String {
     s
 }
 
+/// Like [`report_json`], plus a `"suppressed"` count of findings an
+/// [`crate::allowlist::Allowlist`] removed before this report was produced
+/// (`0` when no allowlist is in play). Kept as a separate function rather
+/// than an added parameter on `report_json` so existing callers of that
+/// function are unaffected.
+pub fn report_json_with_suppressed(source: &str, r: &Report, suppressed: usize) -> String {
+    let base = report_json(source, r);
+    // `report_json` always ends in "]}"; splice the extra field in before
+    // the final brace rather than re-deriving the whole object.
+    let mut s = String::with_capacity(base.len() + 16);
+    s.push_str(&base[..base.len() - 1]);
+    s.push_str(&format!(",\"suppressed\":{suppressed}}}"));
+    s
+}
+
 fn field_raw(out: &mut String, key: &str, raw: &str) {
     out.push_str(&quote(key));
     out.push(':');
@@ -105,5 +120,15 @@ mod tests {
         assert!(j.contains("\"verdict\":\"dangerous\""));
         assert!(j.contains("\"findings\":["));
         assert!(j.contains("\"source\":\"test\""));
+    }
+
+    #[test]
+    fn report_json_with_suppressed_adds_the_field_and_stays_valid_shape() {
+        let r = scan("all good here");
+        let j = report_json_with_suppressed("test", &r, 3);
+        assert!(j.starts_with('{') && j.ends_with('}'));
+        assert!(j.contains("\"suppressed\":3"));
+        // Everything report_json produces is still present verbatim.
+        assert!(j.starts_with(&report_json("test", &r)[..report_json("test", &r).len() - 1]));
     }
 }

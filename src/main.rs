@@ -10,9 +10,9 @@
 use std::io::{BufRead, Read, Write};
 use std::process::ExitCode;
 
-use promptproof::json::report_json;
+use promptproof::json::report_json_with_suppressed;
 use promptproof::sanitize::SanitizePolicy;
-use promptproof::{sanitize, scan_with, Policy, Report, Verdict};
+use promptproof::{sanitize, scan_with, Allowlist, Policy, Report, Verdict};
 
 const USAGE: &str = "\
 promptproof — data-plane prompt-injection & exfiltration scanner
@@ -30,6 +30,23 @@ SCAN OPTIONS:
     --no-decode          do not decode/rescan base64/hex/percent blobs
     --suspicious-at N    score threshold for 'suspicious' (default 1)
     --dangerous-at N     score threshold for 'dangerous'  (default 6)
+    --allowlist PATH     suppress specific known-benign findings; see
+                         ALLOWLIST below (accepted by scan and serve)
+
+ALLOWLIST:
+    A JSON array of objects, each with a required \"rule\" (a finding id, or
+    \"*\" for any rule) and optional \"contains\" (only suppress that rule's
+    hits when the scanned document itself contains this substring — a URL,
+    doc title, or fixed disclaimer; document-grained, not per-occurrence)
+    and \"reason\" (documentation only). Suppressed findings are removed and
+    the verdict/score are recomputed from what's left; the suppressed count
+    is always reported (human output: a summary line; --json / serve: a
+    \"suppressed\" field).
+    Example:
+        [
+          {\"rule\": \"instruction.ignore-previous\", \"contains\": \"As an example\",
+           \"reason\": \"training doc, not live content\"}
+        ]
 
 SANITIZE OPTIONS:
     --mark               replace hidden chars with visible <U+XXXX> markers
@@ -86,6 +103,7 @@ fn cmd_scan(args: &[String]) -> ExitCode {
     let mut policy = Policy::default();
     let mut json = false;
     let mut quiet = false;
+    let mut allowlist_path: Option<String> = None;
     let mut paths: Vec<String> = Vec::new();
 
     let mut i = 0;
@@ -108,6 +126,13 @@ fn cmd_scan(args: &[String]) -> ExitCode {
                     None => return usage_err("--dangerous-at needs a number"),
                 }
             }
+            "--allowlist" => {
+                i += 1;
+                match args.get(i) {
+                    Some(p) => allowlist_path = Some(p.clone()),
+                    None => return usage_err("--allowlist needs a PATH"),
+                }
+            }
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return ExitCode::SUCCESS;
@@ -117,6 +142,11 @@ fn cmd_scan(args: &[String]) -> ExitCode {
         }
         i += 1;
     }
+
+    let allowlist = match load_allowlist(allowlist_path.as_deref()) {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
 
     let inputs: Vec<(String, String)> = if paths.is_empty() {
         match read_stdin() {
@@ -146,7 +176,7 @@ fn cmd_scan(args: &[String]) -> ExitCode {
     let stdout = std::io::stdout();
     let mut w = stdout.lock();
     for (source, text) in &inputs {
-        let report = scan_with(text, &policy);
+        let (report, suppressed) = scan_and_filter(text, &policy, allowlist.as_ref());
         if report.verdict > worst {
             worst = report.verdict;
         }
@@ -154,17 +184,43 @@ fn cmd_scan(args: &[String]) -> ExitCode {
             continue;
         }
         if json {
-            let _ = writeln!(w, "{}", report_json(source, &report));
+            let _ = writeln!(
+                w,
+                "{}",
+                report_json_with_suppressed(source, &report, suppressed)
+            );
         } else {
-            print_human(&mut w, source, &report);
+            print_human(&mut w, source, &report, suppressed);
         }
     }
 
     ExitCode::from(worst.exit_code() as u8)
 }
 
+/// Load and parse an allowlist file, if a path was given. A malformed file
+/// is a usage error (exit 3) — a policy file that fails to load must never
+/// be silently treated as "no policy" (that would fail open on a typo).
+fn load_allowlist(path: Option<&str>) -> Result<Option<Allowlist>, ExitCode> {
+    let Some(path) = path else { return Ok(None) };
+    let text = std::fs::read_to_string(path).map_err(|e| io_err(path, &e.to_string()))?;
+    Allowlist::parse(&text)
+        .map(Some)
+        .map_err(|e| usage_err(&format!("{path}: {e}")))
+}
+
+/// Scan, then apply an allowlist if one is set. Returns the (possibly
+/// filtered) report and how many findings were suppressed.
+fn scan_and_filter(text: &str, policy: &Policy, allowlist: Option<&Allowlist>) -> (Report, usize) {
+    let report = scan_with(text, policy);
+    match allowlist {
+        Some(a) => a.apply(text, report, policy),
+        None => (report, 0),
+    }
+}
+
 fn cmd_serve(args: &[String]) -> ExitCode {
     let mut policy = Policy::default();
+    let mut allowlist_path: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -183,6 +239,13 @@ fn cmd_serve(args: &[String]) -> ExitCode {
                     None => return usage_err("--dangerous-at needs a number"),
                 }
             }
+            "--allowlist" => {
+                i += 1;
+                match args.get(i) {
+                    Some(p) => allowlist_path = Some(p.clone()),
+                    None => return usage_err("--allowlist needs a PATH"),
+                }
+            }
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return ExitCode::SUCCESS;
@@ -191,6 +254,11 @@ fn cmd_serve(args: &[String]) -> ExitCode {
         }
         i += 1;
     }
+
+    let allowlist = match load_allowlist(allowlist_path.as_deref()) {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
 
     let stdin = std::io::stdin();
     let mut reader = std::io::BufReader::new(stdin.lock());
@@ -224,22 +292,34 @@ fn cmd_serve(args: &[String]) -> ExitCode {
             return io_err("<stdin>", &e.to_string());
         }
         let text = String::from_utf8_lossy(&buf);
-        let report = scan_with(&text, &policy);
-        if writeln!(w, "{}", report_json("<serve>", &report)).is_err() || w.flush().is_err() {
+        let (report, suppressed) = scan_and_filter(&text, &policy, allowlist.as_ref());
+        if writeln!(
+            w,
+            "{}",
+            report_json_with_suppressed("<serve>", &report, suppressed)
+        )
+        .is_err()
+            || w.flush().is_err()
+        {
             // The embedder went away; stop quietly.
             return ExitCode::SUCCESS;
         }
     }
 }
 
-fn print_human<W: Write>(w: &mut W, source: &str, r: &Report) {
+fn print_human<W: Write>(w: &mut W, source: &str, r: &Report, suppressed: usize) {
+    let suffix = if suppressed > 0 {
+        format!(" ({suppressed} suppressed by allowlist)")
+    } else {
+        String::new()
+    };
     if r.findings.is_empty() {
-        let _ = writeln!(w, "{source}: OK — clean");
+        let _ = writeln!(w, "{source}: OK — clean{suffix}");
         return;
     }
     let _ = writeln!(
         w,
-        "{source}: {} — score {}, {} finding(s)",
+        "{source}: {} — score {}, {} finding(s){suffix}",
         r.verdict.as_str().to_uppercase(),
         r.score,
         r.findings.len()

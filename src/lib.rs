@@ -46,10 +46,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod allowlist;
 mod confusables;
 mod detect;
 mod encoded;
 pub mod json;
+mod json_value;
 mod matcher;
 mod normalize;
 pub mod report;
@@ -57,6 +59,7 @@ pub mod sanitize;
 mod score;
 mod util;
 
+pub use allowlist::{AllowRule, Allowlist, AllowlistError};
 pub use report::{Category, Finding, Report, Severity, Stats, Verdict};
 pub use sanitize::{sanitize, SanitizePolicy, SanitizeReport};
 pub use score::Policy;

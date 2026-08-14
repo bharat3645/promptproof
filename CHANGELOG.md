@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-14
+
+Adds a C ABI so other languages can bind against promptproof without
+reimplementing detection — the first half of the roadmap's "language
+bindings" item.
+
+### Added
+
+- **`capi/`** — a new `promptproof-capi` crate exporting `promptproof_scan`
+  and `promptproof_free_string` as `extern "C"` functions (builds a
+  `cdylib`/`staticlib`), plus a C header (`capi/include/promptproof.h`) and
+  a real, runnable C demo (`capi/examples/demo.c`). `unsafe` code is
+  deliberately confined to this new crate — the core `promptproof` crate
+  keeps `#![forbid(unsafe_code)]` untouched. `promptproof_scan` accepts a
+  `(ptr, len)` byte buffer (not a NUL-terminated C string, so content with
+  embedded NUL bytes still scans correctly) and returns the same JSON report
+  shape as `promptproof scan --json`, decoding invalid UTF-8 lossily rather
+  than failing.
+- Honest scope: this ships a stable C ABI, not first-class Python/Node/Ruby
+  packages — those would be thin wrappers over this ABI and remain future
+  work, not claimed here.
+
 ## [0.3.0] - 2026-08-11
 
 Adds a JSON allowlist policy file so a caller can suppress a specific,

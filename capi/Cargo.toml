@@ -1,0 +1,21 @@
+[package]
+name = "promptproof-capi"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "C ABI bindings for promptproof — a stable extern \"C\" surface other languages can bind against."
+license = "MIT"
+repository = "https://github.com/bharat3645/promptproof"
+publish = false
+
+[lib]
+name = "promptproof_capi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+promptproof = { path = ".." }
+
+[profile.release]
+opt-level = 3
+lto = true

@@ -4,6 +4,35 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-08-16
+
+Adds a Python binding built on the C ABI — the second half of the
+roadmap's "language bindings" item (after 0.4.0's C ABI).
+
+### Added
+
+- **`bindings/python/promptproof`** — a thin, zero-third-party-dependency
+  `ctypes` wrapper over `libpromptproof_capi` (`promptproof.scan(str |
+  bytes) -> dict`). Locates the compiled library via the
+  `PROMPTPROOF_CAPI_LIB` environment variable, a `capi/target/{release,
+  debug}` path relative to a repo checkout, or the platform shared-library
+  search path, in that order. Reimplements no detection logic — every call
+  runs the real Rust engine.
+- `bindings/python/tests/test_bindings.py` — 11 tests (stdlib `unittest`
+  only) against the real compiled library: benign/malicious verdicts,
+  `str`/`bytes` input parity, empty input, embedded-NUL-byte handling,
+  invalid-UTF-8 lossy decoding, wrong-type rejection, 200 repeated
+  alloc/free cycles for use-after-free/double-free safety, report-shape
+  parity with the CLI's `--json` output, and the library-not-found error
+  path.
+- `bindings/python/examples/demo.py` — a real, runnable demo (mirrors
+  `capi/examples/demo.c`); its real captured output is pasted into the
+  README's new "Python bindings" section.
+- Honest scope: not published to PyPI (no packaging metadata or wheel) —
+  that remains a separate, permission-gated action; this ships the
+  importable module and a real test suite exercising it against the built
+  library, matching the C ABI's own scope note.
+
 ## [0.4.0] - 2026-08-14
 
 Adds a C ABI so other languages can bind against promptproof without

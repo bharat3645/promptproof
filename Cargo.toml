@@ -1,6 +1,6 @@
 [package]
 name = "promptproof"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.74"
 description = "Data-plane prompt-injection & exfiltration scanner: inspect and harden untrusted content (tool results, retrieved documents, web/email/file text) before it reaches an LLM. Zero dependencies."

@@ -57,12 +57,14 @@ mod normalize;
 pub mod report;
 pub mod sanitize;
 mod score;
+pub mod stream;
 mod util;
 
 pub use allowlist::{AllowRule, Allowlist, AllowlistError};
 pub use report::{Category, Finding, Report, Severity, Stats, Verdict};
 pub use sanitize::{sanitize, SanitizePolicy, SanitizeReport};
 pub use score::Policy;
+pub use stream::{scan_reader, scan_reader_with};
 
 /// Scan untrusted content with the default policy.
 pub fn scan(input: &str) -> Report {

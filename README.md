@@ -123,6 +123,11 @@ edge), so results match a non-streaming `scan` of the same input exactly.
 Not combinable with `--allowlist`: `contains` scoping needs the whole
 document, which `--chunk-size` is built to avoid holding in memory.
 
+Real recorded demo (`demo/promptproof-demo.cast`): a plain scan flagging an
+injection, then `--chunk-size 262144` catching the same phrase near the end
+of a real 1.7 MB file. Play it with `asciinema play demo/promptproof-demo.cast`
+(`pip install asciinema` or `brew install asciinema` if you don't have it).
+
 ### `serve` — embed the scanner in another process
 
 Spawning `promptproof scan` once per tool result is fine for a shell pipeline

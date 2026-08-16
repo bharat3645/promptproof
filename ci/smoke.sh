@@ -71,6 +71,39 @@ for f in corpus/benign/*; do
   fi
 done
 
+echo "== --chunk-size streams the same corpus to the same verdicts =="
+# A deliberately small, odd chunk size (37 bytes) forces many chunk
+# boundaries across every real corpus file, verified against the same
+# scan_file_code oracle used for the non-streaming corpus checks above.
+scan_file_code_streaming() { # path -> prints exit code
+  set +e
+  "$BIN" scan --quiet --chunk-size 37 "$1"
+  local c=$?
+  set -e
+  echo "$c"
+}
+for f in corpus/malicious/*; do
+  check "streamed malicious $(basename "$f") -> 2" 2 "$(scan_file_code_streaming "$f")"
+done
+for f in corpus/benign/*; do
+  direct=$(scan_file_code "$f")
+  streamed=$(scan_file_code_streaming "$f")
+  check "streamed benign $(basename "$f") matches non-streaming ($direct)" "$direct" "$streamed"
+done
+
+set +e
+printf 'hello' | "$BIN" scan --chunk-size 0 >/dev/null 2>/dev/null
+check "--chunk-size 0 is a usage error -> 3" 3 "$?"
+set -e
+
+CHUNK_ALLOWLIST_FILE=$(mktemp)
+echo '[{"rule": "*"}]' > "$CHUNK_ALLOWLIST_FILE"
+set +e
+printf 'hello' | "$BIN" scan --chunk-size 64 --allowlist "$CHUNK_ALLOWLIST_FILE" >/dev/null 2>/dev/null
+check "--chunk-size + --allowlist is a usage error -> 3" 3 "$?"
+set -e
+rm -f "$CHUNK_ALLOWLIST_FILE"
+
 echo "== serve: coprocess emits one verdict per length-prefixed frame =="
 # Three frames: benign, dangerous (phrase + tool hijack), empty. The Python
 # helper writes exact byte-length prefixes so content framing is unambiguous.

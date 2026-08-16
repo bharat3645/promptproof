@@ -12,6 +12,7 @@ use std::process::ExitCode;
 
 use promptproof::json::report_json_with_suppressed;
 use promptproof::sanitize::SanitizePolicy;
+use promptproof::stream::{self, DEFAULT_OVERLAP};
 use promptproof::{sanitize, scan_with, Allowlist, Policy, Report, Verdict};
 
 const USAGE: &str = "\
@@ -32,6 +33,10 @@ SCAN OPTIONS:
     --dangerous-at N     score threshold for 'dangerous'  (default 6)
     --allowlist PATH     suppress specific known-benign findings; see
                          ALLOWLIST below (accepted by scan and serve)
+    --chunk-size BYTES   scan in bounded-memory chunks instead of loading
+                         the whole input at once (for very large inputs);
+                         cannot be combined with --allowlist, since its
+                         'contains' matching needs the whole document
 
 ALLOWLIST:
     A JSON array of objects, each with a required \"rule\" (a finding id, or
@@ -104,6 +109,7 @@ fn cmd_scan(args: &[String]) -> ExitCode {
     let mut json = false;
     let mut quiet = false;
     let mut allowlist_path: Option<String> = None;
+    let mut chunk_size: Option<usize> = None;
     let mut paths: Vec<String> = Vec::new();
 
     let mut i = 0;
@@ -133,6 +139,14 @@ fn cmd_scan(args: &[String]) -> ExitCode {
                     None => return usage_err("--allowlist needs a PATH"),
                 }
             }
+            "--chunk-size" => {
+                i += 1;
+                match args.get(i).and_then(|s| s.parse::<usize>().ok()) {
+                    Some(0) => return usage_err("--chunk-size must be greater than 0"),
+                    Some(n) => chunk_size = Some(n),
+                    None => return usage_err("--chunk-size needs a number of bytes"),
+                }
+            }
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return ExitCode::SUCCESS;
@@ -141,6 +155,16 @@ fn cmd_scan(args: &[String]) -> ExitCode {
             s => paths.push(s.to_string()),
         }
         i += 1;
+    }
+
+    if let Some(chunk_size) = chunk_size {
+        if allowlist_path.is_some() {
+            return usage_err(
+                "--chunk-size cannot be combined with --allowlist (allowlist's 'contains' \
+                 matching needs the whole document, which --chunk-size avoids holding in memory)",
+            );
+        }
+        return cmd_scan_streaming(&paths, chunk_size, &policy, json, quiet);
     }
 
     let allowlist = match load_allowlist(allowlist_path.as_deref()) {
@@ -191,6 +215,58 @@ fn cmd_scan(args: &[String]) -> ExitCode {
             );
         } else {
             print_human(&mut w, source, &report, suppressed);
+        }
+    }
+
+    ExitCode::from(worst.exit_code() as u8)
+}
+
+/// `scan --chunk-size` path: reads each input through [`stream::scan_reader_with`]
+/// instead of loading it whole, so a single very large file never needs to
+/// fit in memory at once. No allowlist support here — see the usage-error
+/// check in `cmd_scan` for why.
+fn cmd_scan_streaming(
+    paths: &[String],
+    chunk_size: usize,
+    policy: &Policy,
+    json: bool,
+    quiet: bool,
+) -> ExitCode {
+    let sources: Vec<String> = if paths.is_empty() {
+        vec!["-".to_string()]
+    } else {
+        paths.to_vec()
+    };
+
+    let mut worst = Verdict::Ok;
+    let stdout = std::io::stdout();
+    let mut w = stdout.lock();
+    for p in &sources {
+        let label = if p == "-" { "<stdin>" } else { p.as_str() };
+        let result = if p == "-" {
+            let stdin = std::io::stdin();
+            stream::scan_reader_with(stdin.lock(), policy, chunk_size, DEFAULT_OVERLAP)
+        } else {
+            match std::fs::File::open(p) {
+                Ok(f) => stream::scan_reader_with(f, policy, chunk_size, DEFAULT_OVERLAP),
+                Err(e) => return io_err(p, &e.to_string()),
+            }
+        };
+        let report = match result {
+            Ok(r) => r,
+            Err(e) => return io_err(label, &e.to_string()),
+        };
+
+        if report.verdict > worst {
+            worst = report.verdict;
+        }
+        if quiet {
+            continue;
+        }
+        if json {
+            let _ = writeln!(w, "{}", report_json_with_suppressed(label, &report, 0));
+        } else {
+            print_human(&mut w, label, &report, 0);
         }
     }
 

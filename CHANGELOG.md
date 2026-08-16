@@ -4,6 +4,36 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-16
+
+Adds streaming/chunked scanning for very large inputs — the roadmap's
+"Streaming / chunked scanning" item.
+
+### Added
+
+- **`promptproof::stream`** — `scan_reader` / `scan_reader_with`, scanning
+  any `std::io::Read` source in bounded-memory chunks instead of requiring
+  the whole input as one in-memory `&str`. Content is read in overlapping
+  chunks so a pattern straddling a chunk boundary is still seen whole; a
+  match is only committed once it's clear more data won't change it (never
+  right at a chunk's uncertain trailing edge, which — proven by a real bug
+  caught in this cycle's own test suite — can otherwise produce spurious or
+  duplicate matches from a phrase truncated mid-word). Findings are
+  deduplicated by `(id, start, end)` and, on a real 40 KB multi-chunk
+  synthetic input, verified byte-for-byte identical in outcome to the
+  equivalent non-streaming `scan`.
+- `scan --chunk-size BYTES` — the CLI entry point, reading each input
+  through the streaming path instead of loading it whole. Rejected as a
+  usage error when combined with `--allowlist`, since `contains` scoping
+  needs the whole document, which `--chunk-size` is built to avoid holding.
+- 12 new unit tests (`src/stream.rs`) and 5 new CLI tests
+  (`tests/cli_test.rs`) covering: empty input, small-input parity with the
+  non-streaming scan, detection across many tiny (8-byte) chunks, a pattern
+  split exactly at a chunk boundary, overlap-region dedup, large synthetic
+  multi-chunk parity, invalid-UTF-8 lossy handling, zero-size-parameter
+  panics, I/O error propagation, `max_findings` cap enforcement under
+  streaming, and CLI-level file/stdin scanning plus both usage-error paths.
+
 ## [0.5.0] - 2026-08-16
 
 Adds a Python binding built on the C ABI — the second half of the

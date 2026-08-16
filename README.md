@@ -103,8 +103,25 @@ some-tool | promptproof sanitize > safe.txt
 
 Scan options: `--json`, `--quiet` (exit code only), `--no-decode` (skip
 base64/hex/percent decoding), `--suspicious-at N` / `--dangerous-at N` (tune
-score thresholds). Sanitize options: `--mark` (replace hidden chars with visible
-`<U+XXXX>` markers instead of deleting), `--report` (removal summary to stderr).
+score thresholds), `--chunk-size BYTES` (bounded-memory scanning for very
+large inputs — see below). Sanitize options: `--mark` (replace hidden chars
+with visible `<U+XXXX>` markers instead of deleting), `--report` (removal
+summary to stderr).
+
+### `--chunk-size` — scanning very large inputs without loading them whole
+
+```sh
+# scan a multi-GB log file in 256 KiB chunks instead of reading it all into memory
+promptproof scan --chunk-size 262144 huge-tool-output.log
+```
+
+Content is read and scanned in overlapping chunks, so a trigger phrase or
+encoded blob that happens to straddle a chunk boundary is still caught — the
+tail of each buffer carries into the next, and a match is only accepted once
+it's clear more data won't change it (never right at a chunk's uncertain
+edge), so results match a non-streaming `scan` of the same input exactly.
+Not combinable with `--allowlist`: `contains` scoping needs the whole
+document, which `--chunk-size` is built to avoid holding in memory.
 
 ### `serve` — embed the scanner in another process
 
@@ -151,6 +168,21 @@ carries a stable `id`, `category`, `severity`, `message`, original-byte
 `start`/`end`, a display-safe `snippet`, and an optional `detail` (e.g. the ASCII
 decoded out of smuggled tag characters). See `promptproof::json::report_json`
 for serialization. Thresholds are tunable via `Policy`.
+
+For very large inputs, `promptproof::stream::scan_reader` scans any
+`std::io::Read` source in bounded-memory chunks instead of requiring the
+whole input as one in-memory `&str`:
+
+```rust
+use promptproof::stream::scan_reader;
+
+let file = std::fs::File::open("huge-tool-output.log")?;
+let report = scan_reader(file)?;
+```
+
+`scan_reader_with` exposes the chunk/overlap sizes and an explicit `Policy`
+for tuning; see the module docs for the boundary-straddling guarantees and
+their honest edges.
 
 ## C API
 
@@ -313,6 +345,12 @@ on it:
   database — high-value Latin/Cyrillic/Greek/fullwidth/math look-alikes.
 - **Semantic-only attacks are out of scope** (e.g. persuasive text with no
   injection markers). That is a model-alignment problem, not a scanner one.
+- **`--chunk-size` bounds the overlap window, not the input.** An encoded
+  payload blob longer than the configured overlap is only decoded up to the
+  overlap length within a single pass — a realistic overlap (the default is
+  4096 bytes) comfortably exceeds any real detector's match span, but an
+  operator who shrinks it far below that reintroduces the risk the default
+  is chosen to avoid.
 
 ## Corpus & accuracy
 
@@ -350,7 +388,7 @@ Typical tool results (a few KB) clear in well under a millisecond. Reproduce wit
 ```
 tool call ── mcp-gateway-lite (route/audit/rate-limit)
           └─ toolcage (execute in a WASM sandbox)
-                └─ result ── promptproof.scan ──► ok?  → pass to model
+                └─ result ── promptproof.scan ──►  ok?  → pass to model
                                               └─► sanitize + flag / drop
 ```
 
@@ -377,7 +415,7 @@ behavior. See each repo's README for the wiring and the measured latency it adds
 ## Development
 
 ```sh
-cargo test                                  # 99 tests: unit + integration + corpus + CLI + doctests
+cargo test                                  # 116 tests: unit + integration + corpus + CLI + doctests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 bash ci/smoke.sh                            # end-to-end against the real binary + corpus
@@ -392,7 +430,7 @@ detectors must come with corpus samples.
 
 ## Roadmap
 
-- Streaming / chunked scanning for very large inputs.
+- ~~Streaming / chunked scanning for very large inputs.~~ Shipped: `promptproof::stream::scan_reader` / `scan_reader_with`, and `scan --chunk-size`.
 - Optional NFKC normalization behind a feature flag (needs Unicode data —
   deliberately not added yet: it would be the project's first external
   dependency, even if opt-in, which deserves its own decision rather than a

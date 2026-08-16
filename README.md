@@ -388,7 +388,7 @@ Typical tool results (a few KB) clear in well under a millisecond. Reproduce wit
 ```
 tool call ── mcp-gateway-lite (route/audit/rate-limit)
           └─ toolcage (execute in a WASM sandbox)
-                └─ result ── promptproof.scan ──►  ok?  → pass to model
+                └─ result ── promptproof.scan ──► ok?  → pass to model
                                               └─► sanitize + flag / drop
 ```
 
